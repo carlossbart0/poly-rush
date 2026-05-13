@@ -108,11 +108,10 @@ pub async fn run(
 
     // CEX feed (Coinbase). Strategy A requiere precios CEX para calcular
     // momentum. Productos soportados deben coincidir con product_id_from_slug.
+    // SOL y XRP desactivados (solo BTC y ETH para reducir alcance).
     let cex = Arc::new(CexFeed::new(vec![
         "BTC-USD".to_string(),
         "ETH-USD".to_string(),
-        "SOL-USD".to_string(),
-        "XRP-USD".to_string(),
     ]));
     let cex_state = cex.snapshot_arc();
     let cex_clone = cex.clone();

@@ -22,8 +22,10 @@ static CRYPTO_RE: OnceLock<Regex> = OnceLock::new();
 static HOURLY_RE: OnceLock<Regex> = OnceLock::new();
 
 fn crypto_re() -> &'static Regex {
+    // Solo BTC y ETH activos. SOL, XRP, DOGE, BNB, HYPE desactivados —
+    // (algunos no tienen feed Coinbase, otros desactivados explicitamente).
     CRYPTO_RE.get_or_init(|| {
-        Regex::new(r"(?i)(bitcoin|btc|ethereum|eth|solana|sol|xrp|dogecoin|doge|bnb|hyperliquid|hype)")
+        Regex::new(r"(?i)(bitcoin|btc|ethereum|eth)")
             .expect("crypto regex compiles")
     })
 }
