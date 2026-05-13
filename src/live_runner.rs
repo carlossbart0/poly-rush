@@ -97,7 +97,10 @@ pub async fn run(
         momentum_threshold,
         base_size_usdc: safety.max_per_trade_usdc, // $3 default
         max_size_usdc: safety.max_per_trade_usdc,
-        min_ttr_seconds: 10,
+        // 120s minimo: descarta entries "last second" donde el TP no tiene
+        // tiempo de llenarse antes del cierre del market (sweet spot para
+        // winners observado: 3-10 min antes del cierre).
+        min_ttr_seconds: 120,
         max_ttr_seconds: 900,
         min_price_yes: dec!(0.03),
         max_price_yes: dec!(0.97),
