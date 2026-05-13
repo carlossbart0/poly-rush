@@ -1,0 +1,6 @@
+# Usar winlibs MinGW completo (con gcc + binutils + dlltool funcional).
+# El bundle de Rust solo trae self-contained linker minimal — necesitamos
+# dlltool completo para construir import libraries de windows-sys.
+[target.x86_64-pc-windows-gnu]
+linker = "C:/Users/Py/mingw64/bin/gcc.exe"
+ar = "C:/Users/Py/mingw64/bin/ar.exe"

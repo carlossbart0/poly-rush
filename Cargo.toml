@@ -1,0 +1,39 @@
+[package]
+name = "bot-polymarket-rust"
+version = "0.1.0"
+edition = "2021"
+description = "Bot de arbitraje bilateral en Polymarket — port Rust del bot Python para validacion paralela."
+
+[[bin]]
+name = "polybot"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust_decimal = { version = "1.36", features = ["serde-with-str"] }
+rust_decimal_macros = "1.36"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "1"
+dotenvy = "0.15"
+regex = "1.10"
+url = "2"
+
+# Live trading: SDK oficial Polymarket (incluye alloy, signing, etc.)
+polymarket_client_sdk_v2 = { git = "https://github.com/Polymarket/rs-clob-client-v2", branch = "main", features = ["clob", "data"] }
+alloy = { version = "1.0", features = ["signer-local"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
