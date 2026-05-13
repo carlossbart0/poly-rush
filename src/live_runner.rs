@@ -73,12 +73,11 @@ pub async fn run(
         LiveMode::DryRun => None,
     };
 
-    // Strategy A: momentum CEX direccional. Threshold 1bps en 30s window
-    // (default que disparó 27198 entries en 10min DRY-RUN trinity). Para
-    // live, los safety limits del executor son el gate real, no el threshold.
-    // Sizing conservador para live.
+    // Strategy A: momentum CEX direccional. Threshold 3bps en 30s window —
+    // punto medio entre 1bps (ruido) y 5bps (muy selectivo). Captura
+    // movimientos algo mas que el bid-ask spread sin esperar eventos grandes.
     let lagarb_cfg = LagArbConfig {
-        momentum_threshold: 0.0001,
+        momentum_threshold: 0.0003,
         base_size_usdc: safety.max_per_trade_usdc, // $3 default
         max_size_usdc: safety.max_per_trade_usdc,
         min_ttr_seconds: 10,
