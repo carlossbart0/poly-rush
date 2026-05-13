@@ -539,6 +539,16 @@ impl LiveExecutor {
         let (tp_order_id, tp_error, tp_price_logged) = if let (Some(_), Some(tp_pct)) =
             (&order_id, self.tp_pct)
         {
+            // Sleep 4s para que Polymarket actualice el balance de shares antes
+            // del TP. Sin esto, la limit SELL falla con "balance: 0" porque el
+            // matching engine y el balance store no se sincronizan al instante
+            // (race condition observado en runs reales).
+            info!(
+                mkt = %market_id,
+                "live_tp_waiting_balance_update"
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+
             let t_tp_start = Instant::now();
             let entry_price = leg.entry_price;
             match self
