@@ -83,11 +83,18 @@ pub async fn run(
         LiveMode::DryRun => None,
     };
 
-    // Strategy A: momentum CEX direccional. Threshold 3bps en 30s window —
-    // punto medio entre 1bps (ruido) y 5bps (muy selectivo). Captura
-    // movimientos algo mas que el bid-ask spread sin esperar eventos grandes.
+    // Strategy A: momentum CEX direccional. Threshold configurable via env
+    // LAGARB_MOMENTUM_BPS (default 3 bps si no esta set). Rango razonable: 1-20.
+    // Referencias: 1 bps = ruido browniano, 3-5 bps = signal real, 10+ bps =
+    // muy selectivo (ver RESEARCH.md).
+    let momentum_bps: f64 = std::env::var("LAGARB_MOMENTUM_BPS")
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .unwrap_or(3.0);
+    let momentum_threshold = momentum_bps / 10_000.0;
+    info!(momentum_bps, "lagarb_momentum_threshold");
     let lagarb_cfg = LagArbConfig {
-        momentum_threshold: 0.0003,
+        momentum_threshold,
         base_size_usdc: safety.max_per_trade_usdc, // $3 default
         max_size_usdc: safety.max_per_trade_usdc,
         min_ttr_seconds: 10,
