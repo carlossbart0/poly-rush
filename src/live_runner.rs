@@ -58,7 +58,17 @@ pub async fn run(
     let recorder = Arc::new(TrinityRecorder::open(&out_dir.join("live_decisions.jsonl"))?);
     let trade_recorder = Arc::new(TrinityRecorder::open(&out_dir.join("live_trades.jsonl"))?);
 
-    // Executor solo si Live mode
+    // Executor solo si Live mode. TP-on-place: 15% por default, configurable
+    // via env LAGARB_TP_PCT (en porcentaje, ej "15" para +15%). Si LAGARB_TP_PCT=0
+    // o "off", desactiva el TP automatico.
+    let tp_pct: Option<rust_decimal::Decimal> = match std::env::var("LAGARB_TP_PCT") {
+        Ok(s) if s.trim().eq_ignore_ascii_case("off") || s.trim() == "0" => None,
+        Ok(s) => Some(
+            rust_decimal::Decimal::from_str_exact(s.trim())
+                .map_err(|e| anyhow::anyhow!("LAGARB_TP_PCT invalido '{s}': {e}"))?,
+        ),
+        Err(_) => Some(dec!(15)),
+    };
     let executor: Option<Arc<LiveExecutor>> = match mode {
         LiveMode::Live => {
             let pk = std::env::var("PRIVATE_KEY")
@@ -66,8 +76,8 @@ pub async fn run(
                 .map_err(|_| {
                     anyhow::anyhow!("Mode=Live requiere PRIVATE_KEY en env")
                 })?;
-            info!("live_runner_initializing_executor");
-            let ex = LiveExecutor::init(pk, safety.clone()).await?;
+            info!(tp_pct = ?tp_pct, "live_runner_initializing_executor");
+            let ex = LiveExecutor::init(pk, safety.clone(), tp_pct).await?;
             Some(Arc::new(ex))
         }
         LiveMode::DryRun => None,
@@ -256,6 +266,7 @@ fn spawn_live_dispatcher(
                 token_id,
                 side: ArbSide::Buy,
                 size_usdc: decision.size_usdc,
+                entry_price: leg_price,
             };
 
             let market_for_log = market_id.clone();
@@ -266,11 +277,16 @@ fn spawn_live_dispatcher(
                         dir = %direction,
                         status = ?result.status,
                         order_id = ?result.order_id_a,
+                        tp_order_id = ?result.tp_order_id,
+                        tp_price = ?result.tp_price,
                         size = %result.total_usdc,
                         "live_trade_result"
                     );
                     if let Some(e) = &result.error_a {
                         warn!(mkt = %market_for_log, err = %e, "live_order_error");
+                    }
+                    if let Some(e) = &result.tp_error {
+                        warn!(mkt = %market_for_log, err = %e, "live_tp_error");
                     }
                     let trade_record = serde_json::json!({
                         "strategy": "A-LIVE",
@@ -281,6 +297,9 @@ fn spawn_live_dispatcher(
                         "order_id": result.order_id_a,
                         "error": result.error_a,
                         "size_usdc": result.total_usdc.to_string(),
+                        "tp_order_id": result.tp_order_id,
+                        "tp_price": result.tp_price.map(|p| p.to_string()),
+                        "tp_error": result.tp_error,
                     });
                     let line = serde_json::to_string(&trade_record).unwrap_or_default();
                     let _ = std::fs::OpenOptions::new()

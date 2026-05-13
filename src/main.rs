@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
                 settings,
                 dur,
                 live_runner::LiveMode::DryRun,
-                live::SafetyLimits::default(),
+                live::SafetyLimits::from_env_or_default(),
             )
             .await
         }
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
                 settings,
                 dur,
                 live_runner::LiveMode::Live,
-                live::SafetyLimits::default(),
+                live::SafetyLimits::from_env_or_default(),
             )
             .await
         }
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
             let pk = std::env::var("PRIVATE_KEY")
                 .or_else(|_| std::env::var("POLYMARKET_PRIVATE_KEY"))
                 .map_err(|_| anyhow::anyhow!("Falta env PRIVATE_KEY"))?;
-            let executor = live::LiveExecutor::init(pk, live::SafetyLimits::default()).await?;
+            let executor = live::LiveExecutor::init(pk, live::SafetyLimits::from_env_or_default(), None).await?;
             executor.health_check().await?;
             Ok(())
         }
@@ -182,7 +182,7 @@ async fn main() -> Result<()> {
                 "derive-keys: PK cargada ({}* chars), autenticando con CLOB...",
                 pk.len()
             );
-            let executor = live::LiveExecutor::init(pk, live::SafetyLimits::default()).await?;
+            let executor = live::LiveExecutor::init(pk, live::SafetyLimits::from_env_or_default(), None).await?;
             let _ = executor; // solo validamos auth OK
             println!("derive-keys: AUTH OK. SDK oficial autenticado.");
             println!("Tu wallet ya tiene API key creada/derivada (el SDK maneja esto internamente).");
