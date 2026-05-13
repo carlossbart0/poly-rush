@@ -339,45 +339,45 @@ impl LiveExecutor {
     }
 
     /// Postea limit SELL GTC para TP automatico. Asume que el entry fue
-    /// exitoso. Calcula tp_price y shares desde entry_price y size_usdc.
+    /// exitoso. Usa el precio REAL del fill (avg_fill_price) y las shares
+    /// REALES recibidas (taking_amount) — no valores teoricos.
     /// Retorna order_id si OK o un error explicativo si fallo.
     async fn place_tp_for_entry(
         &self,
         token_id: U256,
-        entry_price: Decimal,
-        size_usdc: Decimal,
+        actual_avg_price: Decimal,
+        actual_shares: Decimal,
         tp_pct: Decimal,
     ) -> Result<String> {
-        if entry_price <= Decimal::ZERO {
-            return Err(anyhow!("entry_price invalido: {}", entry_price));
+        if actual_avg_price <= Decimal::ZERO {
+            return Err(anyhow!("avg_price invalido: {}", actual_avg_price));
         }
 
-        // shares = (size_usdc / entry_price) * 0.98 redondeadas down al lot 0.01.
-        // El factor 0.98 deja 2% de buffer por slippage del fill:
-        // si compre a precio levemente superior al entry_price (slippage),
-        // recibí menos shares que el calculo teorico. Vender 100% del teorico
-        // falla con "balance insuficiente" (bug observado en runs reales).
-        let raw_shares = (size_usdc / entry_price) * dec!(0.98);
-        let shares = round_down_to_tick(raw_shares, SIZE_LOT_SIZE);
+        // Usar las shares reales recibidas (del taking_amount del response).
+        // Solo redondeamos al lot 0.01 por las dudas que Polymarket devuelva
+        // decimales extra. NO aplicamos margen — el server reporta el dato exacto.
+        let shares = round_down_to_tick(actual_shares, SIZE_LOT_SIZE);
         if shares <= Decimal::ZERO {
             return Err(anyhow!(
-                "shares invalidas: {} (size={}, entry={})",
+                "shares invalidas: {} (actual_shares={}, avg={})",
                 shares,
-                size_usdc,
-                entry_price
+                actual_shares,
+                actual_avg_price
             ));
         }
 
-        // tp_price = entry * (1 + pct/100), cap 0.99, redondeado down al tick
-        let raw_tp = entry_price * (Decimal::ONE + tp_pct / dec!(100));
+        // tp_price = avg_fill * (1 + pct/100), cap 0.99, redondeado down al tick.
+        // CRITICO: usar avg_fill (precio REAL) no el teorico, sino el TP queda
+        // mal calibrado si hubo slippage.
+        let raw_tp = actual_avg_price * (Decimal::ONE + tp_pct / dec!(100));
         let capped = raw_tp.min(TP_MAX_PRICE);
         let tick = tick_size_for(capped);
         let tp_price = round_down_to_tick(capped, tick);
-        if tp_price <= entry_price {
+        if tp_price <= actual_avg_price {
             return Err(anyhow!(
-                "tp_price <= entry: tp={} entry={} (cap dejo sin margen)",
+                "tp_price <= avg_fill: tp={} avg={} (cap dejo sin margen)",
                 tp_price,
-                entry_price
+                actual_avg_price
             ));
         }
         let notional = tp_price * shares;
@@ -500,67 +500,89 @@ impl LiveExecutor {
             state.capital_used_usdc += total;
         }
 
-        let (order_id, error) = match post_result {
-            Ok(r) if r.success => {
-                info!(
-                    mkt = %market_id,
-                    t_build_ms,
-                    t_sign_ms,
-                    t_post_ms,
-                    t_total_ms,
-                    order_id = %r.order_id,
-                    "live_trade_latency_ok"
-                );
-                (Some(r.order_id), None)
-            }
-            Ok(r) => {
-                let err_str = format!("order success=false: {:?}", r);
-                warn!(
-                    mkt = %market_id,
-                    stage = "post_unsuccess",
-                    t_build_ms,
-                    t_sign_ms,
-                    t_post_ms,
-                    t_total_ms,
-                    err = %err_str,
-                    "live_trade_latency_failed"
-                );
-                (None, Some(err_str))
-            }
-            Err(e) => {
-                let err_str = format!("post order: {:#}", e);
-                warn!(
-                    mkt = %market_id,
-                    stage = "post",
-                    t_build_ms,
-                    t_sign_ms,
-                    t_post_ms,
-                    t_total_ms,
-                    err = %err_str,
-                    "live_trade_latency_failed"
-                );
-                (None, Some(err_str))
-            }
-        };
+        // Extraer info del fill REAL del response (making/taking) para
+        // usar precio + shares reales en el TP, no valores teoricos.
+        let (order_id, error, fill_info): (Option<String>, Option<String>, Option<(Decimal, Decimal)>) =
+            match post_result {
+                Ok(r) if r.success => {
+                    let making =
+                        Decimal::from_str(&r.making_amount.to_string()).unwrap_or(Decimal::ZERO);
+                    let taking =
+                        Decimal::from_str(&r.taking_amount.to_string()).unwrap_or(Decimal::ZERO);
+                    let avg_fill = if taking > Decimal::ZERO {
+                        making / taking
+                    } else {
+                        Decimal::ZERO
+                    };
+                    info!(
+                        mkt = %market_id,
+                        t_build_ms,
+                        t_sign_ms,
+                        t_post_ms,
+                        t_total_ms,
+                        order_id = %r.order_id,
+                        making_usdc = %making,
+                        taking_shares = %taking,
+                        avg_fill_price = %avg_fill,
+                        entry_px_teorico = %leg.entry_price,
+                        "live_trade_latency_ok"
+                    );
+                    let info = if avg_fill > Decimal::ZERO && taking > Decimal::ZERO {
+                        Some((avg_fill, taking))
+                    } else {
+                        None
+                    };
+                    (Some(r.order_id), None, info)
+                }
+                Ok(r) => {
+                    let err_str = format!("order success=false: {:?}", r);
+                    warn!(
+                        mkt = %market_id,
+                        stage = "post_unsuccess",
+                        t_build_ms,
+                        t_sign_ms,
+                        t_post_ms,
+                        t_total_ms,
+                        err = %err_str,
+                        "live_trade_latency_failed"
+                    );
+                    (None, Some(err_str), None)
+                }
+                Err(e) => {
+                    let err_str = format!("post order: {:#}", e);
+                    warn!(
+                        mkt = %market_id,
+                        stage = "post",
+                        t_build_ms,
+                        t_sign_ms,
+                        t_post_ms,
+                        t_total_ms,
+                        err = %err_str,
+                        "live_trade_latency_failed"
+                    );
+                    (None, Some(err_str), None)
+                }
+            };
 
-        // --- TP-on-place (solo si entry fillea y tp_pct configurado) ---
-        let (tp_order_id, tp_error, tp_price_logged) = if let (Some(_), Some(tp_pct)) =
-            (&order_id, self.tp_pct)
+        // --- TP-on-place (solo si entry fillea, tp_pct configurado y tenemos
+        // fill_info para usar precio + shares REALES) ---
+        let (tp_order_id, tp_error, tp_price_logged) = if let (
+            Some(_),
+            Some(tp_pct),
+            Some((avg_fill, real_shares)),
+        ) = (&order_id, self.tp_pct, fill_info.as_ref().copied())
         {
-            // Sleep 4s para que Polymarket actualice el balance de shares antes
-            // del TP. Sin esto, la limit SELL falla con "balance: 0" porque el
-            // matching engine y el balance store no se sincronizan al instante
-            // (race condition observado en runs reales).
             info!(
                 mkt = %market_id,
+                avg_fill = %avg_fill,
+                real_shares = %real_shares,
                 "live_tp_waiting_balance_update"
             );
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
 
             let t_tp_start = Instant::now();
-            let entry_price = leg.entry_price;
             match self
-                .place_tp_for_entry(token, entry_price, total, tp_pct)
+                .place_tp_for_entry(token, avg_fill, real_shares, tp_pct)
                 .await
             {
                 Ok(tp_id) => {
@@ -568,13 +590,12 @@ impl LiveExecutor {
                     info!(
                         mkt = %market_id,
                         tp_order_id = %tp_id,
-                        entry_px = %entry_price,
+                        avg_fill = %avg_fill,
                         tp_pct = %tp_pct,
                         t_tp_ms,
                         "live_tp_on_place_ok"
                     );
-                    // computamos tp_price para retornar (mismo calc del helper)
-                    let raw_tp = entry_price * (Decimal::ONE + tp_pct / dec!(100));
+                    let raw_tp = avg_fill * (Decimal::ONE + tp_pct / dec!(100));
                     let capped = raw_tp.min(TP_MAX_PRICE);
                     let tick = tick_size_for(capped);
                     let tp_price = round_down_to_tick(capped, tick);
