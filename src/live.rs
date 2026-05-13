@@ -185,17 +185,21 @@ pub enum ArbStatus {
     BothFailed,
 }
 
-/// Tick size segun precio (regla Polymarket).
+/// Tick size segun precio.
+///
+/// BUG FIX: antes asumiamos 0.001 para precios <0.10 o >0.90 pero
+/// muchos markets fuerzan 0.01 igual. Usamos 0.01 siempre — mas
+/// conservador, funciona en todos los markets, evita reject de
+/// "Price has X decimal places. Minimum tick size 0.01...".
 fn tick_size_for(price: Decimal) -> Decimal {
-    if price < PRICE_LOW_THRESHOLD || price > PRICE_HIGH_THRESHOLD {
-        TICK_LOW
-    } else {
-        TICK_NORMAL
-    }
+    // Constantes intencionalmente sin uso para mantener documentacion;
+    // si en futuro Polymarket expone tick per market, leer de Gamma API.
+    let _ = (TICK_LOW, PRICE_LOW_THRESHOLD, PRICE_HIGH_THRESHOLD, price);
+    TICK_NORMAL
 }
 
 /// Redondea price hacia abajo al tick (para SELL — no queremos quedar arriba del target).
-fn round_down_to_tick(price: Decimal, tick: Decimal) -> Decimal {
+pub fn round_down_to_tick(price: Decimal, tick: Decimal) -> Decimal {
     if tick.is_zero() {
         return price;
     }
@@ -348,8 +352,12 @@ impl LiveExecutor {
             return Err(anyhow!("entry_price invalido: {}", entry_price));
         }
 
-        // shares = size_usdc / entry_price, redondeadas down al lot 0.01
-        let raw_shares = size_usdc / entry_price;
+        // shares = (size_usdc / entry_price) * 0.98 redondeadas down al lot 0.01.
+        // El factor 0.98 deja 2% de buffer por slippage del fill:
+        // si compre a precio levemente superior al entry_price (slippage),
+        // recibí menos shares que el calculo teorico. Vender 100% del teorico
+        // falla con "balance insuficiente" (bug observado en runs reales).
+        let raw_shares = (size_usdc / entry_price) * dec!(0.98);
         let shares = round_down_to_tick(raw_shares, SIZE_LOT_SIZE);
         if shares <= Decimal::ZERO {
             return Err(anyhow!(

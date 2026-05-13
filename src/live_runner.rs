@@ -268,10 +268,24 @@ fn spawn_live_dispatcher(
                 continue;
             }
 
+            // BUG FIX: Polymarket requiere max 2 decimales en el size del
+            // entry (market buy USDC maker_amount). Sin redondear, errores
+            // "invalid amounts ... max accuracy of 2 decimals". El sizing
+            // power-law genera valores con 4+ decimales.
+            // Bonus: tambien resuelve el precision overflow (3.000...0001 > 3)
+            // que rebotaba en el safety check.
+            let size_usdc = crate::live::round_down_to_tick(
+                decision.size_usdc,
+                rust_decimal_macros::dec!(0.01),
+            );
+            if size_usdc < rust_decimal_macros::dec!(0.01) {
+                warn!(mkt = %market_id, raw_size = %decision.size_usdc, "live_skip_size_too_small");
+                continue;
+            }
             let leg = ArbLegOrder {
                 token_id,
                 side: ArbSide::Buy,
-                size_usdc: decision.size_usdc,
+                size_usdc,
                 entry_price: leg_price,
             };
 
